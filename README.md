@@ -1,8 +1,8 @@
-# mistralscripts
+# nginx2shellcheck
 
 A collection of small, dependency-free operational scripts. Currently contains:
 
-- [`nginx2shell_check.py`](#nginx2shell_checkpy) — passive detection for the NGINX "Nginx2Shell" vulnerabilities (CVE-2026-123007 / CVE-2026-123633)
+- [`nginx2shell_check.py`](#nginx2shell_checkpy) — passive detection for the NGINX "Nginx2Shell" vulnerabilities (CVE-2026-123007 / CVE-2026-123633) hosted in this repository
 
 ---
 
