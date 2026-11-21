@@ -1,4 +1,4 @@
-# mistralscripts
+# nginx2shellcheck
 
 A collection of small, dependency-free operational scripts. Currently contains:
 
