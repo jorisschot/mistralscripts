@@ -82,6 +82,35 @@ python3 nginx2shell_check.py https://host --json
 2. **Interim mitigation:** disable HTTP/2, or place a proxy that terminates TLS in front of nginx.
 3. **Hunt embedded instances:** appliances, vendor boxes and container images often ship their own old nginx — that is where this class of bug lives longest.
 
+## Multi-host scanner (`nginx2shell_scan.py`)
+
+A parallel asset scanner that wraps `nginx2shell_check.py`: feed it a list of hosts and get a consolidated report.
+
+```bash
+# Scan a target file (one URL/host per line, # comments allowed)
+python3 nginx2shell_scan.py -f targets.txt
+
+# Write a machine-readable report
+python3 nginx2shell_scan.py -f targets.txt --format csv  -o report.csv
+python3 nginx2shell_scan.py -f targets.txt --format sarif -o report.sarif
+
+# Ad-hoc hosts, 20 parallel probes, stdin input also works
+python3 nginx2shell_scan.py https://a.example https://b.example --workers 20
+cat targets.txt | python3 nginx2shell_scan.py -f -
+```
+
+| Flag | Description |
+|---|---|
+| `-f, --file FILE` | target file (`-` for stdin); repeatable; deduplicates; bare hosts default to `https://` |
+| `--workers N` | parallel probes (default 10) |
+| `--format text\|csv\|sarif` | report format (default text) |
+| `-o, --output FILE` | write the report to a file instead of stdout |
+| `--timeout`, `--h2c` | passthrough to the per-host check |
+
+- **CSV columns:** target, version, version_from, http2, both CVE statuses, verdict, notes (pipe-separated).
+- **SARIF 2.1.0** maps findings to rules `NGX0001` (CVE-2026-123007) and `NGX0002` (CVE-2026-123633) with `error` level only when HTTP/2 was confirmed on; unconfirmed HTTP/2 and "insufficient information" targets become `note` level (`INFO-check`). This imports into GitHub Code Scanning, DefectDojo, Semgrep AppSec platforms, etc.
+- **Exit codes:** identically to the single-host check — `0` clean / `1` at least one risky target (in every format).
+
 ### References
 
 - [JFrog Security Research — Nginx2Shell: All You Need to Know](https://research.jfrog.com/post/nginx2shell-all-you-need-to-know-about-cve-2026-123007-and-cve-2026-123633/)
