@@ -1,14 +1,6 @@
 # nginx2shellcheck
 
-A collection of small, dependency-free operational scripts. Currently contains:
-
-- [`nginx2shell_check.py`](#nginx2shell_checkpy) — passive detection for the NGINX "Nginx2Shell" vulnerabilities (CVE-2026-123007 / CVE-2026-123633) hosted in this repository
-
----
-
-## nginx2shell_check.py
-
-A passive detector for the two critical HTTP/2 vulnerabilities in NGINX disclosed on 18 November 2026 (CVSS v4.0 9.2), collectively known as **Nginx2Shell**:
+`nginx2shell_check.py` is a passive detector for the two critical HTTP/2 vulnerabilities in NGINX disclosed on 18 November 2026 (CVSS v4.0 9.2), collectively known as **Nginx2Shell**:
 
 | CVE | Nickname | Bug | Present since |
 |---|---|---|---|
