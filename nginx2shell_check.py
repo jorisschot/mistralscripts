@@ -58,15 +58,14 @@ FIXED_MAINLINE = (1, 31, 9)
 INTRO_C1 = (1, 9, 5)
 INTRO_C2 = (1, 19, 7)
 
-NGINX_PLUS_FIXED_C1 = [(37, 3, 0, 1), (37, 0, 8, 1)]
-NGINX_PLUS_FIXED_C2 = [(37, 2, 0, 1), (37, 0, 7, 1)]
+
 
 
 @dataclass
 class Result:
     target: str
     mode: str
-    version: str | None = None
+    version: tuple[int, ...] | None = None
     version_from: str | None = None
     http2: bool | None = None
     h2_alpn: bool | None = None
@@ -89,6 +88,10 @@ def parse_version(text: str) -> tuple[int, ...] | None:
 def is_nginx_plus(text: str) -> bool:
     m = re.search(r"nginx\s+plus\s*/?\s*v?([0-9]+(?:\.[0-9]+)*)", text, re.I)
     return bool(m) or "nginx plus" in text.lower()
+
+
+def format_version(v: tuple[int, ...] | None) -> str:
+    return ".".join(str(p) for p in v) if v else "onbekend"
 
 
 def vulnerable_for(cve_intro: tuple[int, ...], version: tuple[int, ...]) -> bool:
@@ -130,7 +133,7 @@ def check_local(binary: str) -> Result:
         return r
 
     text = (out.stderr or "") + (out.stdout or "")
-    r.version, r.version_from = _extract_version(text), "nginx -V"
+    r.version, r.version_from = parse_version(text), "nginx -V"
     r.modules = re.findall(r"--with-[\w_]*http_v2_module", text)
     r.http2 = bool(r.modules or re.search(r"\bhttp_v2_module\b", text))
     plus = is_nginx_plus(text)
@@ -140,6 +143,7 @@ def check_local(binary: str) -> Result:
         return r
 
     r.cve_2026_123007, r.cve_2026_123633 = check_version(r.version, plus)
+    _add_caveats(r, plus)
     if plus:
         r.notes.append(
             "NGINX Plus gedetecteerd: check de exacte versie in de F5-adviezen "
@@ -152,20 +156,37 @@ def check_local(binary: str) -> Result:
     return r
 
 
-def _extract_version(text: str):
-    return parse_version(text)
+def _add_caveats(r: Result, plus: bool) -> None:
+    if plus:
+        return
+    if r.cve_2026_123633 == "kwetsbaar":
+        r.notes.append(
+            "CVE-2026-123633 treedt enkel op als NGINX verzoeken doorstuurt "
+            "naar een upstream (proxy_pass/fastcgi_pass/grpc_pass); bij "
+            "louter statische bestellingen is vooral CVE-2026-123007 relevant.")
+    if r.http2:
+        r.notes.append(
+            "ngx_http_v2_module is gecompileerd/in beeld; controleer of de "
+            "configuratie HTTP/2 ook werkelijk activeert (http2 on; resp. "
+            "listen ... http2 vóór 1.25.1). "
+            "Versienummers in de Server-header kunnen op distro-backports "
+            "wijzen die de fix zonder nummerverhoging bevatten.")
 
 
 def probe_url(url: str, timeout: float, h2c: bool) -> Result:
     r = Result(target=url, mode="op afstand")
     parts = urlsplit(url if "://" in url else "https://" + url)
-    host, tls = parts.hostname, parts.scheme != "http"
+    scheme = (parts.scheme or "https").lower()
+    if scheme not in ("https", "http"):
+        r.notes.append(f"Onbekend scheme `{scheme}` in {url}; gebruik https:// of http://")
+        return r
+    host, tls = parts.hostname, scheme == "https"
     port = parts.port or (443 if tls else 80)
     if not host:
         r.notes.append(f"Ongeldig doel: {url}")
         return r
 
-    # 1) Server-header uitlezen (kon torn off zijn door de admin).
+    # 1) Server-header uitlezen (kan uitgeschakeld zijn via server_tokens off).
     try:
         ctx = ssl.create_default_context()
         if tls:
@@ -198,6 +219,9 @@ def probe_url(url: str, timeout: float, h2c: bool) -> Result:
     if m:
         r.version = parse_version(m.group(1))
         r.version_from = f"Server-header van {host}:{port}"
+        if r.version is None:
+            r.notes.append("Server-header bevat geen bruikbaar versienummer "
+                           "(server_tokens off). Gebruik --local op de host zelf.")
     else:
         r.notes.append("Geen `Server`-header: versie is hier niet uit te lezen "
                        "(server_tokens off). Gebruik --local op de host zelf.")
@@ -212,6 +236,7 @@ def probe_url(url: str, timeout: float, h2c: bool) -> Result:
 
     if r.version is not None:
         r.cve_2026_123007, r.cve_2026_123633 = check_version(r.version, False)
+        _add_caveats(r, False)
     else:
         r.notes.append("Zonder een versienummer kan de kwetsbaarheid op afstand "
                        "niet vastgesteld worden; draai --local op de server.")
@@ -232,7 +257,9 @@ def _h2c_probe(host: str, port: int, timeout: float) -> bool | None:
         return None
     if resp.startswith(b"HTTP"):
         return False
-    return len(resp) >= 9 and resp[3] == 0x04
+    if len(resp) >= 9 and resp[3] in (0x03, 0x04, 0x06, 0x07):
+        return True
+    return None
 
 
 def _recv_all(stream, timeout: float, limit: int = 65536) -> bytes:
@@ -254,12 +281,20 @@ def _recv_all(stream, timeout: float, limit: int = 65536) -> bytes:
 def _verdict_text(r: Result) -> str:
     if r.version is None:
         return "onvoldoende informatie"
+    unknown = (r.cve_2026_123007.startswith("onbekend")
+               or r.cve_2026_123633.startswith("onbekend"))
     if r.http2 is False:
         return "veilig (HTTP/2 uit)"
+    if unknown:
+        return "onvoldoende informatie (controleer de versie handmatig)"
     some_vuln = "kwetsbaar" in (r.cve_2026_123007, r.cve_2026_123633)
     if some_vuln:
         return "KWETSBAAR" if r.http2 else "kwetsbaar versienummer, HTTP/2-status onbekend"
     return "versie gepatcht"
+
+
+def _is_risky(r: Result) -> bool:
+    return r.verdict == "KWETSBAAR" or r.verdict == "kwetsbaar versienummer, HTTP/2-status onbekend"
 
 
 def main(argv=None) -> int:
@@ -284,13 +319,15 @@ def main(argv=None) -> int:
     for t in args.targets:
         results.append(probe_url(t, args.timeout, args.h2c))
 
+    risky = any(_is_risky(r) for r in results)
+
     if args.json:
         print(json.dumps([asdict(r) for r in results], indent=2))
-        return 0
+        return 1 if risky else 0
 
     for r in results:
         print(f"== {r.target} ({r.mode}) ==")
-        print(f"  versie            : {r.version or 'onbekend'}"
+        print(f"  versie            : {format_version(r.version)}"
               + (f"  [via {r.version_from}]" if r.version_from else ""))
         print(f"  HTTP/2            : {r.http2 if r.http2 is not None else 'onbekend'}")
         print(f"  {C1} : {r.cve_2026_123007}")
@@ -300,8 +337,6 @@ def main(argv=None) -> int:
             print(f"  notitie           : {n}")
         print()
 
-    risky = any("KWETSBAAR" in r.verdict or "kwetsbaar versienummer" in r.verdict
-                for r in results)
     print(" advies: upgrade naar NGINX 1.30.7 (stable) of 1.31.9 (mainline); "
           "tijdelijke mitigatie: HTTP/2 uitschakelen, of proxy die TLS beëindigt "
           "in plaats van nginx zelf."
